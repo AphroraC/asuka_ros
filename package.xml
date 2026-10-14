@@ -1,0 +1,39 @@
+<?xml version="1.0"?>
+<package format="2">
+  <name>asuka_ros</name>
+  <version>1.0.0</version>
+  <description>
+    ROS adapter of the asuka framework: sensor I/O, rviz_viewer extension and
+    the three entry points (rosnode / rosbag / nodelet)
+  </description>
+
+  <maintainer email="aphrorac@gmail.com">aphrorac</maintainer>
+  <license>GPL-3.0</license>
+
+  <buildtool_depend>catkin</buildtool_depend>
+
+  <depend>asuka</depend>
+  <depend>roscpp</depend>
+  <depend>nodelet</depend>
+  <depend>pluginlib</depend>
+  <depend>pcl_ros</depend>
+  <depend>pcl_conversions</depend>
+  <depend>cv_bridge</depend>
+  <depend>roslib</depend>
+  <depend>rosbag</depend>
+  <depend>std_msgs</depend>
+  <depend>sensor_msgs</depend>
+  <depend>nav_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>tf2_ros</depend>
+  <depend>tf2_eigen</depend>
+
+  <build_depend>eigen</build_depend>
+  <build_depend>pcl</build_depend>
+  <build_depend>spdlog</build_depend>
+  <build_depend>libboost-dev</build_depend>
+
+  <export>
+    <nodelet plugin="${prefix}/nodelet_plugins.xml" />
+  </export>
+</package>

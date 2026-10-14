@@ -1,0 +1,9 @@
+<?xml version="1.0"?>
+<launch>
+  <arg name="nodelet_manager" default="nodelet_manager" />
+  <node pkg="nodelet" type="nodelet" name="$(arg nodelet_manager)" args="manager" output="screen"/>
+  <node pkg="nodelet" type="nodelet" name="asuka" args="load asuka/AsukaNodelet $(arg nodelet_manager)" output="screen">
+    <!-- Directory holding the routing config.json; empty/unset falls back to the asuka package config dir. -->
+    <!-- <param name="config_path" value="/path/to/config_dir"/> -->
+  </node>
+</launch>

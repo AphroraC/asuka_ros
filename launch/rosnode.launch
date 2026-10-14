@@ -1,0 +1,13 @@
+<?xml version="1.0"?>
+<launch>
+  <arg name="rviz" default="true"/>
+  <group if="$(arg rviz)">
+    <node launch-prefix="nice" pkg="rviz" type="rviz" name="rviz" args="-d $(find asuka_ros)/launch/config.rviz"/>
+  </group>
+
+  <node pkg="asuka_ros" type="asuka_rosnode" name="asuka_rosnode" output="screen">
+    <!-- Directory holding the routing config.json; empty/unset falls back to the asuka package config dir. -->
+    <!-- <param name="config_path" value="/path/to/config_dir"/> -->
+  </node>
+
+</launch>
