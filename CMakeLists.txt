@@ -102,17 +102,6 @@ target_link_libraries(asuka_rviz_viewer
   ${catkin_LIBRARIES}
 )
 
-# freedom_viewer: ROS publisher for the freedom extension's result streams
-# (on_freedom_* slots -> /asuka/freedom/* topics). Loaded alongside
-# libasuka_freedom.so via config_extensions.json.
-add_library(asuka_freedom_viewer SHARED
-  src/asuka_ros/freedom_viewer.cpp
-)
-target_link_libraries(asuka_freedom_viewer
-  spdlog::spdlog
-  ${catkin_LIBRARIES}
-)
-
 add_library(asuka_nodelet apps/asuka_nodelet.cpp)
 target_link_libraries(asuka_nodelet
   asuka_ros
@@ -135,7 +124,7 @@ target_link_libraries(asuka_rosbag
 ## Install ##
 #############
 install(DIRECTORY include/ DESTINATION ${CATKIN_PACKAGE_INCLUDE_DESTINATION})
-install(TARGETS asuka_ros asuka_rviz_viewer asuka_freedom_viewer asuka_nodelet asuka_rosnode asuka_rosbag
+install(TARGETS asuka_ros asuka_rviz_viewer asuka_nodelet asuka_rosnode asuka_rosbag
   ARCHIVE DESTINATION ${CATKIN_PACKAGE_LIB_DESTINATION}
   LIBRARY DESTINATION ${CATKIN_PACKAGE_LIB_DESTINATION}
   RUNTIME DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
