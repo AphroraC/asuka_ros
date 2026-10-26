@@ -1,0 +1,209 @@
+#include <asuka_ros/rviz_viewer.hpp>
+
+#include <pcl/common/transforms.h>
+#include <pcl/point_types.h>
+#include <pcl_conversions/pcl_conversions.h>
+
+namespace asuka {
+
+RvizViewer::RvizViewer() {
+  logger = create_module_logger("rviz");
+
+  const Config config = load_config("config_extensions");
+  world_frame_id = config.param<std::string>("rviz_viewer", "world_frame_id", "world");
+  imu_frame_id = config.param<std::string>("rviz_viewer", "imu_frame_id", "imu");
+  enable_odometry_publish = config.param<bool>("rviz_viewer", "publish_odometry", true);
+  enable_odometry_imu_publish = config.param<bool>("rviz_viewer", "publish_odometry_imu", true);
+  enable_cloud_imu_publish = config.param<bool>("rviz_viewer", "publish_cloud_imu", true);
+  enable_cloud_world_publish = config.param<bool>("rviz_viewer", "publish_cloud_world", true);
+  enable_tf_publish = config.param<bool>("rviz_viewer", "publish_tf", true);
+
+  odometry_pub = nh.advertise<nav_msgs::Odometry>("/asuka/odometry", 10);
+  odometry_imu_pub = nh.advertise<nav_msgs::Odometry>("/asuka/odometry_imu", 100);
+  cloud_imu_pub = nh.advertise<sensor_msgs::PointCloud2>("/asuka/points", 10);
+  cloud_world_pub = nh.advertise<sensor_msgs::PointCloud2>("/asuka/world", 10);
+
+  tf_broadcaster = std::make_unique<tf2_ros::TransformBroadcaster>();
+
+  setup_callbacks();
+
+  kill_switch = false;
+  processing_thread_obj = JoiningThread(&RvizViewer::processing_thread, this);
+}
+
+RvizViewer::~RvizViewer() {
+  stop();
+}
+
+void RvizViewer::setup_callbacks() {
+  on_new_frame_sub =
+    Callbacks::on_new_frame.subscribe(std::bind(&RvizViewer::on_new_frame, this, std::placeholders::_1));
+  on_odometry_imu_sub =
+    Callbacks::on_odometry_imu.subscribe(std::bind(&RvizViewer::on_odometry_imu, this, std::placeholders::_1));
+}
+
+void RvizViewer::stop() {
+  if (!kill_switch.exchange(true)) {
+    queue_cv.notify_all();
+  }
+  processing_thread_obj.join();
+}
+
+void RvizViewer::enqueue(QueueItem::Kind kind, const KeyFrame::ConstPtr& frame) {
+  QueueItem item;
+  item.kind = kind;
+  item.frame = frame;
+  push_item(item);
+}
+
+void RvizViewer::push_item(const QueueItem& item) {
+  std::lock_guard<std::mutex> lock(queue_mutex);
+  if (queue.full()) {
+    if (++dropped_items % 100 == 1) {
+      logger->warn("rviz_viewer queue overflow, dropping oldest items ({} dropped)", dropped_items);
+    }
+  }
+  queue.push_back(item);
+  queue_cv.notify_one();
+}
+
+void RvizViewer::on_new_frame(const KeyFrame::ConstPtr& frame) {
+  if (!frame) return;
+  if (enable_odometry_publish || enable_cloud_imu_publish || (enable_tf_publish && !enable_odometry_imu_publish)) {
+    enqueue(QueueItem::Kind::NEW_FRAME, frame);
+  }
+}
+
+void RvizViewer::on_odometry_imu(const KeyFrame::ConstPtr& frame) {
+  if (!frame) return;
+  if (enable_odometry_imu_publish) enqueue(QueueItem::Kind::ODOMETRY_IMU, frame);
+}
+
+void RvizViewer::processing_thread() {
+  while (true) {
+    QueueItem item;
+    {
+      std::unique_lock<std::mutex> lock(queue_mutex);
+      queue_cv.wait(lock, [this] { return !queue.empty() || kill_switch; });
+      if (kill_switch && queue.empty()) return;
+      item = queue.front();
+      queue.pop_front();
+    }
+
+    switch (item.kind) {
+      case QueueItem::Kind::NEW_FRAME:
+        process_new_frame(item.frame);
+        break;
+      case QueueItem::Kind::ODOMETRY_IMU:
+        process_odometry_imu(item.frame);
+        break;
+    }
+  }
+}
+
+void RvizViewer::process_new_frame(const KeyFrame::ConstPtr& frame) {
+  if (!frame) return;
+  if (enable_odometry_publish) publish_odometry(frame, odometry_pub);
+  if (enable_tf_publish && !enable_odometry_imu_publish) publish_tf(frame);
+  if (enable_cloud_imu_publish) {
+    pcl::PointCloud<DisplayPoint>::Ptr cloud_imu(new pcl::PointCloud<DisplayPoint>());
+    pcl::PointCloud<DisplayPoint>::Ptr cloud_world(new pcl::PointCloud<DisplayPoint>());
+    prepare_clouds(frame, cloud_imu, cloud_world);
+    if (enable_cloud_imu_publish) publish_pointcloud(frame->stamp, imu_frame_id, cloud_imu, cloud_imu_pub);
+    if (enable_cloud_world_publish) publish_pointcloud(frame->stamp, world_frame_id, cloud_world, cloud_world_pub);
+  }
+}
+
+void RvizViewer::process_odometry_imu(const KeyFrame::ConstPtr& frame) {
+  if (!frame) return;
+  publish_odometry(frame, odometry_imu_pub);
+  publish_tf(frame);
+}
+
+void RvizViewer::publish_odometry(const KeyFrame::ConstPtr& frame, ros::Publisher& publisher) {
+  const Eigen::Vector3d pos = frame->T_world_imu.translation();
+  const Eigen::Quaterniond quat(frame->T_world_imu.rotation());
+
+  nav_msgs::Odometry msg;
+  msg.header.stamp = ros::Time().fromSec(frame->stamp);
+  msg.header.frame_id = world_frame_id;
+  msg.child_frame_id = imu_frame_id;
+
+  msg.pose.pose.position.x = pos.x();
+  msg.pose.pose.position.y = pos.y();
+  msg.pose.pose.position.z = pos.z();
+  msg.pose.pose.orientation.x = quat.x();
+  msg.pose.pose.orientation.y = quat.y();
+  msg.pose.pose.orientation.z = quat.z();
+  msg.pose.pose.orientation.w = quat.w();
+
+  msg.twist.twist.linear.x = frame->v_world_imu.x();
+  msg.twist.twist.linear.y = frame->v_world_imu.y();
+  msg.twist.twist.linear.z = frame->v_world_imu.z();
+
+  publisher.publish(msg);
+
+  logger->trace("publish odometry stamp={:.3f} pos=({:.2f},{:.2f},{:.2f})", frame->stamp, pos.x(), pos.y(), pos.z());
+}
+
+void RvizViewer::publish_pointcloud(
+  double stamp,
+  const std::string& frame_id,
+  const pcl::PointCloud<DisplayPoint>::ConstPtr& cloud,
+  ros::Publisher& publisher) {
+  if (cloud->empty()) return;
+
+  sensor_msgs::PointCloud2::Ptr msg(new sensor_msgs::PointCloud2());
+  pcl::toROSMsg(*cloud, *msg);
+  msg->header.stamp = ros::Time().fromSec(stamp);
+  msg->header.frame_id = frame_id;
+  publisher.publish(msg);
+
+  logger->trace("publish cloud {}pts frame={}", cloud->size(), frame_id);
+}
+
+void RvizViewer::publish_tf(const KeyFrame::ConstPtr& frame) {
+  const Eigen::Vector3d pos = frame->T_world_imu.translation();
+  const Eigen::Quaterniond quat(frame->T_world_imu.rotation());
+
+  geometry_msgs::TransformStamped tf_msg;
+  tf_msg.header.stamp = ros::Time().fromSec(frame->stamp);
+  tf_msg.header.frame_id = world_frame_id;
+  tf_msg.child_frame_id = imu_frame_id;
+  tf_msg.transform.translation.x = pos.x();
+  tf_msg.transform.translation.y = pos.y();
+  tf_msg.transform.translation.z = pos.z();
+  tf_msg.transform.rotation.x = quat.x();
+  tf_msg.transform.rotation.y = quat.y();
+  tf_msg.transform.rotation.z = quat.z();
+  tf_msg.transform.rotation.w = quat.w();
+  tf_broadcaster->sendTransform(tf_msg);
+}
+
+void RvizViewer::prepare_clouds(
+  const KeyFrame::ConstPtr& frame,
+  pcl::PointCloud<DisplayPoint>::Ptr cloud_imu,
+  pcl::PointCloud<DisplayPoint>::Ptr cloud_world) {
+  if (!frame || !frame->cloud_imu || frame->cloud_imu->empty()) return;
+
+  cloud_imu->reserve(frame->cloud_imu->size());
+  for (const auto& point : *frame->cloud_imu) {
+    DisplayPoint point_out;
+    point_out.x = point.x;
+    point_out.y = point.y;
+    point_out.z = point.z;
+    point_out.intensity = point.intensity;
+    cloud_imu->push_back(point_out);
+  }
+
+  if (enable_cloud_world_publish) {
+    cloud_world->reserve(cloud_imu->size());
+    pcl::transformPointCloud(*cloud_imu, *cloud_world, frame->T_world_imu.matrix().cast<float>());
+  }
+}
+
+}  // namespace asuka
+
+extern "C" asuka::ExtensionModule* create_extension_module() {
+  return new asuka::RvizViewer();
+}
